@@ -2,7 +2,7 @@ name: 出展者データを配信
 
 on:
   schedule:
-    - cron: '*/15 * * * *'   # 15分ごと（GitHub の混み具合で10〜20分ほど遅れることがある）
+        - cron: '7,22,37,52 * * * *'   # 15分ごと。毎時0・15・30・45分は混んで遅れやすいのでずらしてある
   workflow_dispatch:          # Actions の画面の「Run workflow」で今すぐ実行
 
 permissions:
