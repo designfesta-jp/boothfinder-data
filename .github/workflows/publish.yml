@@ -1,0 +1,44 @@
+name: 出展者データを配信
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'   # 15分ごと（GitHub の混み具合で10〜20分ほど遅れることがある）
+  workflow_dispatch:          # Actions の画面の「Run workflow」で今すぐ実行
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - id: convert
+        name: スプレッドシートから取得して変換
+        env:
+          SHEET_CSV_URL: ${{ secrets.SHEET_CSV_URL }}
+          PAGES_URL: https://designfesta-jp.github.io/boothfinder-data/
+          MAP_DATA_URL: https://designfestagallery.com/wp-content/uploads/2022/03/map-data.txt
+        run: node scripts/convert.mjs site
+      # 前回から変わっていなければ配信しない（手動実行のときは必ず配信する）
+      - if: steps.convert.outputs.changed == 'true' || github.event_name == 'workflow_dispatch'
+        uses: actions/configure-pages@v5
+      - if: steps.convert.outputs.changed == 'true' || github.event_name == 'workflow_dispatch'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deploy
+        if: steps.convert.outputs.changed == 'true' || github.event_name == 'workflow_dispatch'
+        uses: actions/deploy-pages@v4
