@@ -48,8 +48,10 @@ if (prevCount && boothIds.length < prevCount * MIN_RATIO) {
 }
 const changed = !prev || JSON.stringify(prev.boothDataMap) !== JSON.stringify(map);
 
-// 地図にないブース番号（シートの入力ミスの可能性）。止めずに一覧だけ出す
-const mapBooths = await loadMapBoothIds();
+// 地図にないブース番号（シートの入力ミスの可能性）。止めずに一覧だけ出す。
+// map-data.txt は WordPress から約1.4MBあるので、データが変わったときと手動実行のときだけ取る
+const checkMap = changed || process.env.GITHUB_EVENT_NAME === 'workflow_dispatch' || !process.env.GITHUB_ACTIONS;
+const mapBooths = checkMap ? await loadMapBoothIds() : null;
 const notOnMap = mapBooths ? boothIds.filter(id => !mapBooths.has(id)).sort() : null;
 
 const generatedAt = new Date().toISOString();
@@ -64,7 +66,8 @@ const lines = [
   `- ブース: ${boothIds.length} 件（前回 ${prevCount || 'なし'}）`,
   `- 前回からの変更: ${changed ? 'あり（配信する）' : 'なし（配信しない）'}`,
   `- http(s) 以外で外したURL: ${rejectedUrls} 件`,
-  notOnMap === null ? `- 地図との照合: map-data.txt を取得できず未確認`
+  !checkMap ? `- 地図との照合: 変更がないので省略`
+    : notOnMap === null ? `- 地図との照合: map-data.txt を取得できず未確認`
     : `- 地図にないブース番号: ${notOnMap.length} 件${notOnMap.length ? '（' + notOnMap.slice(0, 50).join(', ') + (notOnMap.length > 50 ? ' …' : '') + '）' : ''}`,
 ];
 console.log(lines.join('\n'));
