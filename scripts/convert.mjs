@@ -6,7 +6,9 @@
 //   環境変数 SHEET_CSV_URL … 公開CSVのURL（GitHub の Secret）
 //            SHEET_CSV_FILE … URLの代わりに手元のCSVファイルを読む（テスト用）
 //            PAGES_URL      … 配信中のデータの置き場所（前回との比較に使う）
-//            MAP_DATA_URL   … map-data.txt のURL（地図にないブース番号の確認に使う）
+//            MAP_DATA_URL   … map-data.txt のURL（地図にないブース番号の確認に使う）。地図のデータは上げ直すたびに名前を変える
+//                             （map-data-64a01.txt など）ので、ふだんは同じサイトのメディアライブラリから一番新しい map-data…txt を探して使い、
+//                             見つからないときだけこの URL を使う
 // 見出しが足りない・件数が前回の半分未満になったなどの異常があれば、何も書かずに失敗で終わる
 // （その場合は配信されず、前回のデータがそのまま残る）。
 import { mkdir, readFile, writeFile, appendFile } from 'node:fs/promises';
@@ -51,7 +53,8 @@ const changed = !prev || JSON.stringify(prev.boothDataMap) !== JSON.stringify(ma
 // 地図にないブース番号（シートの入力ミスの可能性）。止めずに一覧だけ出す。
 // map-data.txt は WordPress から約1.4MBあるので、データが変わったときと手動実行のときだけ取る
 const checkMap = changed || process.env.GITHUB_EVENT_NAME === 'workflow_dispatch' || !process.env.GITHUB_ACTIONS;
-const mapBooths = checkMap ? await loadMapBoothIds() : null;
+const mapInfo = checkMap ? await loadMapBoothIds() : null;
+const mapBooths = mapInfo && mapInfo.ids;
 const notOnMap = mapBooths ? boothIds.filter(id => !mapBooths.has(id)).sort() : null;
 
 const generatedAt = new Date().toISOString();
@@ -68,7 +71,7 @@ const lines = [
   `- http(s) 以外で外したURL: ${rejectedUrls} 件`,
   !checkMap ? `- 地図との照合: 変更がないので省略`
     : notOnMap === null ? `- 地図との照合: map-data.txt を取得できず未確認`
-    : `- 地図にないブース番号: ${notOnMap.length} 件${notOnMap.length ? '（' + notOnMap.slice(0, 50).join(', ') + (notOnMap.length > 50 ? ' …' : '') + '）' : ''}`,
+    : `- 地図にないブース番号（${mapInfo.url.split('/').pop()} と照合）: ${notOnMap.length} 件${notOnMap.length ? '（' + notOnMap.slice(0, 50).join(', ') + (notOnMap.length > 50 ? ' …' : '') + '）' : ''}`,
 ];
 console.log(lines.join('\n'));
 if (process.env.GITHUB_STEP_SUMMARY) await appendFile(process.env.GITHUB_STEP_SUMMARY, lines.join('\n') + '\n');
@@ -103,8 +106,18 @@ async function fetchJson(url) {
   }
 }
 
+// メディアライブラリで一番新しい map-data…txt の URL（WordPress の REST API。検索結果は新しい順）
+async function findLatestMapDataUrl() {
+  const origin = process.env.MAP_DATA_URL ? new URL(process.env.MAP_DATA_URL).origin : 'https://designfestagallery.com';
+  const list = await fetchJson(origin + '/wp-json/wp/v2/media?search=map-data&per_page=50&_fields=source_url');
+  const hit = Array.isArray(list) && list.find(m => /\/map-data[^/]*\.txt$/i.test(String(m.source_url || '')));
+  return hit ? hit.source_url : null;
+}
+
 async function loadMapBoothIds() {
-  const data = await fetchJson(process.env.MAP_DATA_URL);
+  let url = await findLatestMapDataUrl();
+  let data = url && await fetchJson(url);
+  if (!data || !data.halls) { url = process.env.MAP_DATA_URL; data = await fetchJson(url); }
   if (!data || !data.halls) return null;
   const ids = new Set();
   for (const hall of Object.values(data.halls)) {
@@ -112,7 +125,7 @@ async function loadMapBoothIds() {
       for (const id of Object.keys(area.booths || {})) ids.add(normBoothId(id));
     }
   }
-  return ids;
+  return { ids, url };
 }
 
 // ---- ここから下はマップエディタと同じ処理 ----
