@@ -18,8 +18,9 @@ The conversion follows the same rules as the map editor (`tools/map-editor-V5v5.
 Exhibitor photos are the original uploads in DFGApp's storage. They average 2.4MB each, which is too heavy for the booth detail's 132px squares. Each run therefore also publishes small versions:
 - `t/<hash>.jpg` is a 264px square JPEG of every photo, listed in each exhibitor's `th` array in the same order as `img`. An empty string means it couldn't be made this time, so boothfinder falls back to the original.
 - HEIC photos are converted to JPEG. Their `img` entry points to a 960px version at `l/<hash>.jpg`, because most browsers can't show HEIC.
-- Files browsers can't show (PDF, PSD, RAW, video) and photos that return 4xx are dropped from `img`.
-- `photos.json` records each photo's result (`ok`, `heic` or `bad`), so `bad` files aren't downloaded again.
+- Files browsers can't show (PDF, PSD, RAW, video) and photos that return 404/410 are dropped from `img`.
+- Slightly corrupt JPEGs, which browsers still display, are read as far as possible (`failOn: 'none'`). If a small version still can't be made, the original stays in `img` with an empty `th`.
+- `photos.json` (`{ v, photos }`) records each photo's result: `ok`, `heic`, `raw` (original kept, no small version) or `bad`. `bad` files aren't downloaded again. `v` is the version of these rules (`PHOTO_RULES`). When it changes, `bad` photos from an older version are checked again, and a scheduled run doesn't stop early.
 - Made photos are reused from the Actions cache (`.photo-cache`) first, then from the previous Pages deploy. Only new photos are fetched and converted. The first run fetches all ~10,000 originals (~24GB), which takes a while; later runs are quick.
 - If the sheet hasn't changed and no photo is waiting for a retry, a scheduled run stops early without touching photos.
 

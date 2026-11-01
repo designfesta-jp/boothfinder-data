@@ -54,6 +54,11 @@ const LARGE_MAX = 960;           // HEIC の拡大表示用の長い辺
 const PHOTO_QUALITY = 78;
 const PHOTO_FORMATS = new Set(['jpeg', 'png', 'webp', 'gif']);   // そのままブラウザで見られる形式（AVIF は下で別に見る）
 const PHOTO_PARALLEL = 6;
+// photos.json の判定の決まりの版。決まりを変えたら上げる。版が違う photos.json の bad は、もう一度調べる
+// （2：少し壊れた JPEG をブラウザと同じく読む。前は sharp が読むのをやめて bad にしていた。2026-11-02）
+const PHOTO_RULES = 2;
+// sharp は少しでも壊れた画像だと読むのをやめるが、ブラウザはたいてい出せるので、読めるところまで読む
+const SHARP_OPT = { failOn: 'none' };
 
 const csvText = await loadCsv();
 const { map, rejectedUrls, rows } = parseCSV(csvText);
@@ -65,10 +70,10 @@ const prevCount = prev && prev.boothDataMap ? Object.keys(prev.boothDataMap).len
 if (prevCount && boothIds.length < prevCount * MIN_RATIO) {
   fail(`ブースの件数が前回の ${prevCount} 件から ${boothIds.length} 件に減りました（${MIN_RATIO * 100}% 未満）。シートを確認してください。意図した減少なら、PAGES の前回データを消すか MIN_RATIO を見直してから手動で実行してください`);
 }
-// シートが前回と同じで、取れなかった写真もなければ、写真の処理もせずに終える（手動実行・手元では必ず作る）
+// シートが前回と同じで、取れなかった写真もなく、写真の判定の決まりも同じなら、写真の処理もせずに終える（手動実行・手元では必ず作る）
 const sourceHash = sha1(JSON.stringify(map));
 const force = process.env.GITHUB_EVENT_NAME === 'workflow_dispatch' || !process.env.GITHUB_ACTIONS;
-if (!force && prev && prev.sourceHash === sourceHash && !prev.photoRetry) {
+if (!force && prev && prev.sourceHash === sourceHash && !prev.photoRetry && prev.photoRules === PHOTO_RULES) {
   await report([
     `## 出展者データ`,
     `- ブース: ${boothIds.length} 件（前回 ${prevCount}）`,
@@ -91,7 +96,7 @@ const notOnMap = mapBooths ? boothIds.filter(id => !mapBooths.has(id)).sort() : 
 
 const generatedAt = new Date().toISOString();
 await writeFile(join(outDir, 'exhibitors.json'),
-  JSON.stringify({ generatedAt, sourceHash, photoRetry: photo.retry.length, boothCount: boothIds.length, boothDataMap: map }));
+  JSON.stringify({ generatedAt, sourceHash, photoRetry: photo.retry.length, photoRules: PHOTO_RULES, boothCount: boothIds.length, boothDataMap: map }));
 await writeFile(join(outDir, 'robots.txt'), 'User-agent: *\nDisallow: /\n');
 
 const list = (a, n) => a.length ? '（' + a.slice(0, n).join(', ') + (a.length > n ? ' …' : '') + '）' : '';
@@ -106,6 +111,7 @@ await report([
     : `- 地図にないブース番号（${mapInfo.url.split('/').pop()} と照合）: ${notOnMap.length} 件${list(notOnMap, 50)}`,
   `- 写真: ${photo.total} 枚（新しく作った ${photo.made}・控えから ${photo.cached}・前回の配信から ${photo.reused}）`,
   `- 写真の HEIC を JPEG に直した: ${photo.heic.length} 枚${list(photo.heic, 30)}`,
+  `- 小さな版を作れず元の画像のままにした写真: ${photo.raw.length} 枚${list(photo.raw, 30)}`,
   `- 外した写真（ブラウザで見られない形式・消えた写真）: ${photo.bad.length} 枚${list(photo.bad, 30)}`,
   `- 取れなかった写真（元の画像のまま。次の実行でもう一度作る）: ${photo.retry.length} 枚${list(photo.retry, 30)}`,
 ]);
@@ -131,9 +137,10 @@ function sha1(s) {
 }
 
 // 写真：出展者ごとの img（元の画像の URL）を、見られるものだけにし、小さな版の URL を th に並べる（img と同じ順。作れなかった所は空）。
-// 写真ごとの結果（ok・heic・bad）は photos.json に書き、次の実行で使う（bad は取り直さない）
+// 写真ごとの結果は photos.json（{ v: PHOTO_RULES, photos: { URL: 結果 } }）に書き、次の実行で使う。
+// 結果は ok（小さな版あり）・heic（JPEG に直した）・raw（ブラウザで見られる形式だが小さな版を作れない。元の画像のまま）・bad（外す。取り直さない）
 async function processPhotos(map) {
-  const stats = { total: 0, made: 0, cached: 0, reused: 0, heic: [], bad: [], retry: [] };
+  const stats = { total: 0, made: 0, cached: 0, reused: 0, heic: [], raw: [], bad: [], retry: [] };
   const entries = [...new Set(Object.values(map).flat())].filter(e => e.img);
   const where = new Map();   // URL → そのURLを持つブース番号（報告用）
   for (const [id, list] of Object.entries(map)) for (const e of list) for (const u of e.img || []) if (!where.has(u)) where.set(u, id);
@@ -145,8 +152,8 @@ async function processPhotos(map) {
     await mkdir(join(outDir, d), { recursive: true });
     await mkdir(join(PHOTO_CACHE, d), { recursive: true });
   }
-  const cacheManifest = await readJson(join(PHOTO_CACHE, 'photos.json')) || {};
-  const pagesManifest = await fetchJson(process.env.PAGES_URL && process.env.PAGES_URL + 'photos.json?t=' + Date.now()) || {};
+  const cacheManifest = photoManifest(await readJson(join(PHOTO_CACHE, 'photos.json')));
+  const pagesManifest = photoManifest(await fetchJson(process.env.PAGES_URL && process.env.PAGES_URL + 'photos.json?t=' + Date.now()));
   const manifest = {}, result = new Map();
   sharp.cache(false);
 
@@ -156,6 +163,7 @@ async function processPhotos(map) {
     const known = cacheManifest[url] || pagesManifest[url];
     const label = where.get(url);
     if (known === 'bad') { manifest[url] = 'bad'; result.set(url, 'bad'); stats.bad.push(label); return; }
+    if (known === 'raw') { manifest[url] = 'raw'; result.set(url, 'raw'); stats.raw.push(label); return; }
     // 作り済みなら使い回す（控え → 前回の配信）
     if (known === 'ok' || known === 'heic') {
       const need = known === 'heic' ? ['t', 'l'] : ['t'];
@@ -178,27 +186,32 @@ async function processPhotos(map) {
     let buf, gone = false;
     try {
       const res = await fetch(url, { signal: AbortSignal.timeout(120000) });
-      gone = res.status >= 400 && res.status < 500;   // 消えた写真（404 など）は、取り直さず外す
+      gone = res.status === 404 || res.status === 410;   // 消えた写真は、取り直さず外す（ほかのエラーは次にもう一度）
       if (!res.ok) throw new Error('HTTP ' + res.status);
       buf = Buffer.from(await res.arrayBuffer());
     } catch (e) {
       if (gone) { manifest[url] = 'bad'; result.set(url, 'bad'); stats.bad.push(label); return; }
       result.set(url, 'retry'); stats.retry.push(label); return;
     }
-    let kind = 'ok';
+    // 形式を見る。ブラウザで見られない形式（PDF・PSD・RAW・動画など）は外す
+    let kind = 'ok', meta = null;
+    try { meta = await sharp(buf, SHARP_OPT).metadata(); } catch (e) { /* 下で HEIC か見る */ }
+    const avif = meta && meta.format === 'heif' && meta.compression === 'av1';
     try {
-      let meta = null;
-      try { meta = await sharp(buf).metadata(); } catch (e) { /* 下で HEIC か見る */ }
-      const avif = meta && meta.format === 'heif' && meta.compression === 'av1';
       if (!avif && isHeic(buf)) {
         buf = Buffer.from(await heicConvert({ buffer: buf, format: 'JPEG', quality: 0.92 }));
         kind = 'heic';
       } else if (!meta || (!PHOTO_FORMATS.has(meta.format) && !avif)) {
         throw new Error('形式 ' + (meta && meta.format));
       }
-      const out = { t: await sharp(buf).rotate().resize(THUMB_SIZE, THUMB_SIZE, { fit: 'cover' })
+    } catch (e) {
+      manifest[url] = 'bad'; result.set(url, 'bad'); stats.bad.push(label); return;
+    }
+    // 小さな版を作る。作れなくても、見られる形式なら元の画像のまま残す（HEIC は直せなければ外す）
+    try {
+      const out = { t: await sharp(buf, SHARP_OPT).rotate().resize(THUMB_SIZE, THUMB_SIZE, { fit: 'cover' })
         .flatten({ background: '#ffffff' }).jpeg({ quality: PHOTO_QUALITY, mozjpeg: true }).toBuffer() };
-      if (kind === 'heic') out.l = await sharp(buf).rotate()
+      if (kind === 'heic') out.l = await sharp(buf, SHARP_OPT).rotate()
         .resize({ width: LARGE_MAX, height: LARGE_MAX, fit: 'inside', withoutEnlargement: true })
         .flatten({ background: '#ffffff' }).jpeg({ quality: PHOTO_QUALITY, mozjpeg: true }).toBuffer();
       for (const d of Object.keys(out)) {
@@ -206,8 +219,8 @@ async function processPhotos(map) {
         await writeFile(join(outDir, files[d]), out[d]);
       }
     } catch (e) {
-      // 画像として読めない（PDF・PSD・動画など）
-      manifest[url] = 'bad'; result.set(url, 'bad'); stats.bad.push(label); return;
+      const k = kind === 'heic' ? 'bad' : 'raw';
+      manifest[url] = k; result.set(url, k); stats[k].push(label); return;
     }
     manifest[url] = kind; result.set(url, kind); stats.made++;
     if (kind === 'heic') stats.heic.push(label);
@@ -224,11 +237,21 @@ async function processPhotos(map) {
     if (img.length) e.img = img; else delete e.img;
     if (th.some(Boolean)) e.th = th; else delete e.th;
   }
-  const json = JSON.stringify(manifest);
+  const json = JSON.stringify({ v: PHOTO_RULES, photos: manifest });
   await writeFile(join(outDir, 'photos.json'), json);
   await writeFile(join(PHOTO_CACHE, 'photos.json'), json);
-  for (const k of ['heic', 'bad', 'retry']) stats[k].sort();
+  for (const k of ['heic', 'raw', 'bad', 'retry']) stats[k].sort();
   return stats;
+}
+
+// photos.json を { URL: 結果 } にする。判定の決まりの版が違えば（v がない最初の形も）、bad は捨ててもう一度調べる
+function photoManifest(j) {
+  if (!j) return {};
+  const same = j.v === PHOTO_RULES;
+  const photos = j.photos || (j.v === undefined ? j : {});
+  const out = {};
+  for (const [u, s] of Object.entries(photos)) if (same || s !== 'bad') out[u] = s;
+  return out;
 }
 
 function isHeic(buf) {
