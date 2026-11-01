@@ -16,29 +16,47 @@ concurrency:
 
 jobs:
   publish:
-    runs-on: ubuntu-latest
+    # 開催（11/14・15）の前後に動く環境が変わらないよう、24.04 に固定（df-event-data と同じ。開催後に latest へ戻してよい）
+    runs-on: ubuntu-24.04
+    # 写真の小さな版を初めて作るときは約1万枚を取るので長くかかる（2回目からは作り済みを使い回す）
+    timeout-minutes: 180
     environment:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      # 作った写真の控え。前の実行の分を戻す（なければ、前回の配信から取るか作り直す）
+      - uses: actions/cache/restore@v4
+        with:
+          path: .photo-cache
+          key: photos-${{ github.run_id }}
+          restore-keys: photos-
       - id: convert
         name: スプレッドシートから取得して変換
         env:
           SHEET_CSV_URL: ${{ secrets.SHEET_CSV_URL }}
           PAGES_URL: https://designfesta-jp.github.io/boothfinder-data/
           MAP_DATA_URL: https://designfestagallery.com/wp-content/uploads/2022/03/map-data.txt
+          PHOTO_CACHE_DIR: .photo-cache
         run: node scripts/convert.mjs site
+      # 写真を扱った実行だけ、控えを残す（途中で止まっても、作った分は次に使う）
+      - if: always() && steps.convert.outputs.photos == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .photo-cache
+          key: photos-${{ github.run_id }}
       # 前回から変わっていなければ配信しない（手動実行のときは必ず配信する）
       - if: steps.convert.outputs.changed == 'true' || github.event_name == 'workflow_dispatch'
-        uses: actions/configure-pages@v5
+        uses: actions/configure-pages@v6
       - if: steps.convert.outputs.changed == 'true' || github.event_name == 'workflow_dispatch'
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: site
       - id: deploy
         if: steps.convert.outputs.changed == 'true' || github.event_name == 'workflow_dispatch'
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
