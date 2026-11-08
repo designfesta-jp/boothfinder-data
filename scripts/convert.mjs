@@ -343,6 +343,22 @@ function isSafeUrl(u) {
   return /^https?:\/\//i.test((u || '').trim());
 }
 
+// リンクの列（HP・SNS1・SNS2・URL）の1セルを、URL の並びにする（2026-11-08 ユーザー）。
+// 1セルに2つ以上書かれていることがあるので、空白（全角も）・改行・「、」・カンマで分ける。
+// https:// が抜けたもの（www.example.com・instagram.com/xxx など）は https:// を補う。
+// どちらでもないもの（「なし」・@アカウント・javascript: など）は外して、bad に数える
+function splitLinkCell(cell) {
+  const urls = [];
+  let bad = 0;
+  for (const part of String(cell || '').split(/[\s、，,]+/)) {
+    if (!part) continue;
+    if (isSafeUrl(part)) urls.push(part);
+    else if (/^(?:[a-z0-9-]+\.)+[a-z]{2,}(?::\d+)?(?:[/?#]\S*)?$/i.test(part)) urls.push('https://' + part);
+    else bad++;
+  }
+  return { urls, bad };
+}
+
 function normCsvHeader(h) {
   return String(h || '').replace(/^﻿/, '').normalize('NFKC').replace(/\s+/g, '');
 }
@@ -387,7 +403,7 @@ function parseCSV(text) {
     const boothStr = get(row, 'booth');
     if (!boothStr) continue; // 空行・ブース未割当の行
     const url = {};
-    for (const key of ['hpUrl', 'sns1', 'sns2', 'img1', 'img2', 'img3', 'img4', 'appUrl']) {
+    for (const key of ['img1', 'img2', 'img3', 'img4']) {
       url[key] = get(row, key);
       // http(s)以外のURL（javascript: など）を弾く。空欄はそのまま通す
       if (url[key] && !isSafeUrl(url[key])) { rejectedUrls++; url[key] = ''; }
@@ -396,12 +412,22 @@ function parseCSV(text) {
     const desc1 = get(row, 'desc1'), desc2 = get(row, 'desc2');
     if (desc1) entry.desc1 = desc1;
     if (desc2) entry.desc2 = desc2;
-    const snsList = [];
-    if (url.hpUrl) snsList.push({ type: 'link', url: url.hpUrl });
-    if (url.sns1) snsList.push({ url: url.sns1 }); // type未指定 → 表示時にURLから自動判定
-    if (url.sns2) snsList.push({ url: url.sns2 });
-    // HP・SNS が1つもなければ、申込時の URL を出す（type未指定 → 表示時にURLから自動判定）
-    if (!snsList.length && url.appUrl) { snsList.push({ url: url.appUrl }); appUrlUsed++; }
+    // リンク：HP は type:'link'、ほかは type 未指定（表示時に URL から自動判定）。同じ URL は1本にする
+    const snsList = [], seen = new Set();
+    const addLinks = (key, type) => {
+      const r = splitLinkCell(get(row, key));
+      rejectedUrls += r.bad;
+      for (const u of r.urls) {
+        if (seen.has(u)) continue;
+        seen.add(u);
+        snsList.push(type ? { type, url: u } : { url: u });
+      }
+    };
+    addLinks('hpUrl', 'link');
+    addLinks('sns1');
+    addLinks('sns2');
+    // HP・SNS が1つもなければ、申込時の URL を出す
+    if (!snsList.length) { addLinks('appUrl'); if (snsList.length) appUrlUsed++; }
     if (snsList.length) entry.sns = snsList;
     const imgList = [url.img1, url.img2, url.img3, url.img4].filter(Boolean);
     if (imgList.length) entry.img = imgList;
