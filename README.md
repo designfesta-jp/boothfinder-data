@@ -11,7 +11,7 @@ boothfinder itself lives in a private repo (`designfesta-jp/boothfinder`). This 
 
 The conversion follows the same rules as the map editor (`tools/map-editor-V5v5.html` in boothfinder):
 - columns are matched by their header names;
-- only http(s) URLs are kept;
+- only http(s) URLs are kept. In the link columns (homepage, SNS1, SNS2, `URL`), a cell with several URLs is split on spaces, line breaks, commas and 「、」, and a URL missing `https://` (such as `www.example.com`) gets it added;
 - booth numbers are zero-padded to 3 digits.
 
 If an exhibitor has no homepage, SNS1 or SNS2 URL, the `URL` column (the URL from the application form, column AD of the source data) becomes their link. This column is optional: if the "公開用" tab doesn't have it, the run carries on without it, and the run summary says so.
