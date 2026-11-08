@@ -43,6 +43,9 @@ const CSV_FIELDS = [
   { key: 'img2',     names: ['画像2リンク'], required: true },
   { key: 'img3',     names: ['画像3リンク'], required: true },
   { key: 'img4',     names: ['画像4リンク'], required: true },
+  // 申込時の URL（元データの AD 列）。HP・SNS1・SNS2 がすべて空の出展者だけ、リンクに出す（2026-11-08 ユーザー）。
+  // 公開用タブにまだ列がなくても配信は止めない（なければ使わないだけ。実行の要約に出す）
+  { key: 'appUrl',   names: ['URL'] },
 ];
 // 前回の件数からこれ未満の割合に減ったら、シートの事故とみなして配信しない
 const MIN_RATIO = 0.5;
@@ -61,7 +64,7 @@ const PHOTO_RULES = 2;
 const SHARP_OPT = { failOn: 'none' };
 
 const csvText = await loadCsv();
-const { map, rejectedUrls, rows } = parseCSV(csvText);
+const { map, rejectedUrls, rows, appUrlCol, appUrlUsed } = parseCSV(csvText);
 const boothIds = Object.keys(map);
 if (!boothIds.length) fail('ブース番号の入った行が1件もありません');
 
@@ -106,6 +109,8 @@ await report([
   `- ブース: ${boothIds.length} 件（前回 ${prevCount || 'なし'}）`,
   `- 前回からの変更: ${changed ? 'あり（配信する）' : 'なし（配信しない）'}`,
   `- http(s) 以外で外したURL: ${rejectedUrls} 件`,
+  appUrlCol ? `- HP・SNS が空なので申込時の URL（URL の列）を出した出展者: ${appUrlUsed} 件`
+    : `- 申込時の URL（URL の列）: 公開用タブに列がないので使っていない`,
   !checkMap ? `- 地図との照合: 変更がないので省略`
     : notOnMap === null ? `- 地図との照合: map-data.txt を取得できず未確認`
     : `- 地図にないブース番号（${mapInfo.url.split('/').pop()} と照合）: ${notOnMap.length} 件${list(notOnMap, 50)}`,
@@ -368,20 +373,21 @@ function parseCSV(text) {
   const idx = {}, missing = [];
   for (const f of CSV_FIELDS) {
     const i = f.names.map(normCsvHeader).map(n => headers.indexOf(n)).find(i => i >= 0);
-    if (i === undefined) missing.push(f.names[0]); else idx[f.key] = i;
+    if (i !== undefined) idx[f.key] = i;
+    else if (f.required) missing.push(f.names[0]);
   }
   if (missing.length) {
     fail('見出しが見つかりません: ' + missing.join('、') + '\nCSVの見出し: ' + (all[0] || []).join(', ').slice(0, 500));
   }
-  const get = (row, key) => (row[idx[key]] || '').trim();
+  const get = (row, key) => idx[key] === undefined ? '' : (row[idx[key]] || '').trim();
 
   const map = {};
-  let rejectedUrls = 0;
+  let rejectedUrls = 0, appUrlUsed = 0;
   for (const row of all.slice(1)) {
     const boothStr = get(row, 'booth');
     if (!boothStr) continue; // 空行・ブース未割当の行
     const url = {};
-    for (const key of ['hpUrl', 'sns1', 'sns2', 'img1', 'img2', 'img3', 'img4']) {
+    for (const key of ['hpUrl', 'sns1', 'sns2', 'img1', 'img2', 'img3', 'img4', 'appUrl']) {
       url[key] = get(row, key);
       // http(s)以外のURL（javascript: など）を弾く。空欄はそのまま通す
       if (url[key] && !isSafeUrl(url[key])) { rejectedUrls++; url[key] = ''; }
@@ -394,6 +400,8 @@ function parseCSV(text) {
     if (url.hpUrl) snsList.push({ type: 'link', url: url.hpUrl });
     if (url.sns1) snsList.push({ url: url.sns1 }); // type未指定 → 表示時にURLから自動判定
     if (url.sns2) snsList.push({ url: url.sns2 });
+    // HP・SNS が1つもなければ、申込時の URL を出す（type未指定 → 表示時にURLから自動判定）
+    if (!snsList.length && url.appUrl) { snsList.push({ url: url.appUrl }); appUrlUsed++; }
     if (snsList.length) entry.sns = snsList;
     const imgList = [url.img1, url.img2, url.img3, url.img4].filter(Boolean);
     if (imgList.length) entry.img = imgList;
@@ -405,5 +413,5 @@ function parseCSV(text) {
       (map[id] ||= []).push(entry);
     }
   }
-  return { map, rejectedUrls, rows: all.length - 1 };
+  return { map, rejectedUrls, rows: all.length - 1, appUrlCol: idx.appUrl !== undefined, appUrlUsed };
 }

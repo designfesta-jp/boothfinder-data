@@ -14,6 +14,8 @@ The conversion follows the same rules as the map editor (`tools/map-editor-V5v5.
 - only http(s) URLs are kept;
 - booth numbers are zero-padded to 3 digits.
 
+If an exhibitor has no homepage, SNS1 or SNS2 URL, the `URL` column (the URL from the application form, column AD of the source data) becomes their link. This column is optional: if the "公開用" tab doesn't have it, the run carries on without it, and the run summary says so.
+
 ## Photos
 Exhibitor photos are the original uploads in DFGApp's storage. They average 2.4MB each, which is too heavy for the booth detail's 132px squares. Each run therefore also publishes small versions:
 - `t/<hash>.jpg` is a 264px square JPEG of every photo, listed in each exhibitor's `th` array in the same order as `img`. An empty string means it couldn't be made this time, so boothfinder falls back to the original.
@@ -25,7 +27,7 @@ Exhibitor photos are the original uploads in DFGApp's storage. They average 2.4M
 - If the sheet hasn't changed and no photo is waiting for a retry, a scheduled run stops early without touching photos.
 
 ## Safeguards
-- **Broken input:** if a header is missing, or the booth count drops below half of the previous run, the run fails. Nothing is published and the previous data stays live.
+- **Broken input:** if a required header is missing (any of the 15 columns except `URL`), or the booth count drops below half of the previous run, the run fails. Nothing is published and the previous data stays live.
 - **No change:** if the data hasn't changed since last time, the run doesn't publish.
 - **Typo check:** booth numbers that aren't on the map are listed in each run's summary.
 
